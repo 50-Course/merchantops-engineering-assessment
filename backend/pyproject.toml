@@ -1,0 +1,11 @@
+[tool.black]
+line-length = 88
+target-version = ["py312"]
+extend-exclude = '/migrations/'
+
+[tool.isort]
+profile = "black"
+line_length = 88
+known_first_party = ["catalog"]
+skip_gitignore = false
+extend_skip = ["migrations"]
