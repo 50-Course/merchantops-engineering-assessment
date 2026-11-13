@@ -17,6 +17,7 @@ from catalog.models import (
     ProductVariant,
 )
 from catalog.serializers import (
+    InventoryAdjustmentSerializer,
     ProductActivitySerializer,
     ProductListSerializer,
     ProductUpdateSerializer,
@@ -277,4 +278,50 @@ class ProductActivityView(generics.ListAPIView):
             AuditLog.objects.filter(product_id=product.pk)
             .select_related("actor")
             .order_by("-created_at", "-id")
+        )
+
+
+class InventoryAdjustmentView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk, variant_id):
+        merchant_id = request.query_params.get("merchant_id")
+
+        if not merchant_id:
+            raise ValidationError({"merchant_id": "This parameter is required."})
+
+        try:
+            merchant_id = int(merchant_id)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError({"merchant_id": "Must be a valid integer."}) from exc
+
+        if merchant_id <= 0:
+            raise ValidationError({"merchant_id": "Must be a positive integer."})
+
+        get_object_or_404(
+            Merchant.objects.filter(members=request.user),
+            pk=merchant_id,
+        )
+
+        variant = get_object_or_404(
+            ProductVariant.objects.filter(
+                product_id=pk,
+                product__merchant_id=merchant_id,
+            ),
+            pk=variant_id,
+        )
+
+        serializer = InventoryAdjustmentSerializer(
+            data=request.data,
+        )
+        serializer.is_valid(raise_exception=True)
+
+        adjustment = serializer.save(
+            variant=variant,
+            actor=request.user,
+        )
+
+        return Response(
+            ProductActivitySerializer(adjustment).data,
+            status=status.HTTP_201_CREATED,
         )
