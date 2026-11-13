@@ -23,6 +23,8 @@ const dirty = computed(() => changed.value.length > 0)
 const saving = ref(false)
 const saveError = ref('')
 const saved = ref(false)
+
+const adjustmentDialog = ref(null)
 const adjustingVariant = ref(null)
 const adjustmentAmount = ref('')
 const adjustmentReason = ref('')
@@ -151,11 +153,18 @@ function openAdjustment(variant) {
   adjustmentReason.value = ''
   adjustmentError.value = ''
   adjustmentSuccess.value = ''
+
+  adjustmentDialog.value.showModal()
 }
 
 function cancelAdjustment() {
+  if (adjusting.value) return
+
+  // we close the dialog box and reset all values to null
+  adjustmentDialog.value.close()
   adjustingVariant.value = null
   adjustmentError.value = ''
+  adjustmentSuccess.value = ''
 }
 
 async function adjustInventory() {
@@ -316,6 +325,12 @@ async function adjustInventory() {
         </table>
       </div>
       <p v-else class="request-state">No variants for this product.</p>
+      <dialog
+              ref="adjustmentDialog"
+              class="adjustment-dialog"
+              aria-label="Inventory adjustment"
+              @cancel.prevent="cancelAdjustment"
+          >
         <form v-if="adjustingVariant" @submit.prevent="adjustInventory">
           <div class="form-content">
             <h2>Adjust stock — {{ adjustingVariant.name }}</h2>
@@ -370,14 +385,37 @@ async function adjustInventory() {
               type="submit"
               :disabled="!canAdjust"
             >
-              {{ adjusting ? 'Adjusting…' : 'Adjust stock' }}
+              {{ adjusting ? 'Adjusting…' : 'Confirm adjustment' }}
             </button>
           </div>
         </form>
 
-        <div v-if="adjustmentSuccess" class="form-content">
-          <p class="success-text" role="status">{{ adjustmentSuccess }}</p>
+        <div v-else-if="adjustmentSuccess" class="adjustment-success">
+            <div class="adjustment-checkmark" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                                     stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M5 12l4 4L19 6" />
+                </svg>
+            </div>
+
+            <h2>Stock adjusted successfully</h2>
+
+            <p class="success-text" role="status">
+            {{ adjustmentSuccess }}
+            </p>
+
+            <p>Your adjustment has been recorded in the product activity history.</p>
+
+            <button
+                    class="button button-primary"
+                    type="button"
+                    @click="cancelAdjustment"
+                    >
+                    Done
+            </button>
         </div>
+      </dialog>
+
     </section>
 
     <section v-show="tab === 'availability'" id="panel-availability" class="panel tab-panel" role="tabpanel" aria-labelledby="tab-availability" tabindex="0">
@@ -397,3 +435,55 @@ async function adjustInventory() {
     </section>
   </template>
 </template>
+
+
+<style scoped>
+.adjustment-dialog {
+  width: min(480px, calc(100% - 32px));
+  max-height: calc(100vh - 48px);
+  margin: auto;
+  padding: 0;
+  border: 1px solid #e2e5ed;
+  border-radius: 12px;
+  background: white;
+  color: inherit;
+  overflow-y: auto;
+  box-shadow: 0 20px 60px rgb(0 0 0 / 15%);
+}
+
+.adjustment-dialog::backdrop {
+  background: rgb(15 23 42 / 45%);
+}
+
+.adjustment-dialog .form-grid {
+  grid-template-columns: 1fr;
+}
+
+.adjustment-success {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 32px 24px;
+  text-align: center;
+}
+
+.adjustment-checkmark {
+  display: grid;
+  place-items: center;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: #e2f3e9;
+  color: #15803d;
+}
+
+.adjustment-checkmark svg {
+  width: 36px;
+  height: 36px;
+}
+
+.adjustment-success .button {
+  width: 100%;
+}
+</style>
