@@ -1,8 +1,10 @@
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.db import IntegrityError, connection
-from django.test import TestCase
+from django.db import IntegrityError, close_old_connections, connection, connections
+from django.test import TestCase, TransactionTestCase, skipUnlessDBFeature
 from rest_framework.exceptions import ValidationError
 
 from catalog.models import (
@@ -217,3 +219,153 @@ class InventoryAdjustmentTests(TestCase):
                 self.adjust_inventory(10)
 
         self.assert_inventory_unchanged()
+
+
+@skipUnlessDBFeature("has_select_for_update")
+class InventoryAdjustmentConcurrencyTests(TransactionTestCase):
+    def setUp(self):
+        self.first_operator = get_user_model().objects.create_user(
+            username="first-operator",
+        )
+        self.second_operator = get_user_model().objects.create_user(
+            username="second-operator",
+        )
+
+        merchant = Merchant.objects.create(
+            name="Concurrency Merchant",
+            slug="concurrency-merchant",
+        )
+        merchant.members.add(
+            self.first_operator,
+            self.second_operator,
+        )
+
+        category = Category.objects.create(
+            merchant=merchant,
+            name="Electronics",
+        )
+        self.product = Product.objects.create(
+            merchant=merchant,
+            category=category,
+            name="Laptop",
+            sku="LAPTOP-001",
+        )
+        self.variant = ProductVariant.objects.create(
+            product=self.product,
+            name="Black",
+            sku="LAPTOP-001-BLACK",
+        )
+        self.inventory = Inventory.objects.create(
+            variant=self.variant,
+            quantity=100,
+            reserved=20,
+        )
+
+    def run_competing_adjustments(self, first_change, second_change):
+        barrier = Barrier(2)
+
+        def adjust(actor, quantity_change):
+            close_old_connections()
+
+            try:
+                serializer = InventoryAdjustmentSerializer(
+                    data={
+                        "quantity_change": quantity_change,
+                        "reason": "Stock correction",
+                    }
+                )
+                serializer.is_valid(raise_exception=True)
+
+                barrier.wait(timeout=10)
+
+                try:
+                    serializer.save(
+                        variant=self.variant,
+                        actor=actor,
+                    )
+                except ValidationError as exc:
+                    if "quantity_change" not in exc.detail:
+                        raise
+
+                    return False
+
+                return True
+            finally:
+                connections.close_all()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(
+                adjust,
+                self.first_operator,
+                first_change,
+            )
+            second = executor.submit(
+                adjust,
+                self.second_operator,
+                second_change,
+            )
+
+            return [
+                first.result(timeout=30),
+                second.result(timeout=30),
+            ]
+
+    def test_competing_adjustments_preserve_stock_and_audit_history(self):
+        results = self.run_competing_adjustments(10, -5)
+
+        self.assertEqual(results, [True, True])
+
+        self.inventory.refresh_from_db()
+        self.assertEqual(self.inventory.quantity, 105)
+
+        logs = list(
+            AuditLog.objects.filter(
+                product=self.product,
+                action="inventory.adjusted",
+            ).order_by("id")
+        )
+
+        self.assertEqual(len(logs), 2)
+
+        first, second = logs
+
+        self.assertEqual(first.details["quantity_before"], 100)
+        self.assertEqual(
+            second.details["quantity_before"],
+            first.details["quantity_after"],
+        )
+        self.assertEqual(second.details["quantity_after"], 105)
+
+        self.assertCountEqual(
+            [
+                (
+                    log.actor_id,
+                    log.details["quantity_change"],
+                )
+                for log in logs
+            ],
+            [
+                (self.first_operator.pk, 10),
+                (self.second_operator.pk, -5),
+            ],
+        )
+
+    def test_competing_deductions_cannot_reduce_stock_below_reserved(self):
+        results = self.run_competing_adjustments(-60, -50)
+
+        self.assertCountEqual(results, [True, False])
+
+        self.inventory.refresh_from_db()
+        self.assertIn(self.inventory.quantity, (40, 50))
+        self.assertEqual(self.inventory.reserved, 20)
+
+        log = AuditLog.objects.get(
+            product=self.product,
+            action="inventory.adjusted",
+        )
+
+        self.assertEqual(log.details["quantity_before"], 100)
+        self.assertEqual(
+            log.details["quantity_after"],
+            self.inventory.quantity,
+        )
