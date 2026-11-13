@@ -58,8 +58,16 @@ watch(page, fetchActivity, { immediate: true })
           </thead>
           <tbody>
             <tr v-for="record in data.results" :key="record.id">
-              <th scope="row">{{ record.action === 'product.updated' ? 'Product updated' : record.action }}</th>
-              <td>{{ record.actor || 'Unknown' }}</td>
+              <th scope="row">
+                  {{
+                  record.action === 'product.updated'
+                  ? 'Product updated'
+                  : record.action === 'inventory.adjusted'
+                  ? 'Inventory adjusted'
+                  : record.action
+                  }}
+              </th>
+              <td>{{ record.actor || record.details?.actor_username || 'Unknown' }}</td>
               <td><time :datetime="record.created_at">{{ timestamp.format(new Date(record.created_at)) }}</time></td>
               <td>
                 <dl v-if="record.details?.changes && Object.keys(record.details.changes).length" class="change-list">
@@ -72,6 +80,39 @@ watch(page, fetchActivity, { immediate: true })
                     </dd>
                   </div>
                 </dl>
+                
+                <dl v-else-if="record.action === 'inventory.adjusted'" class="change-list">
+                    <div>
+                        <dt>Variant ID</dt>
+                        <dd>{{ record.details.variant_id }}</dd>
+                    </div>
+
+                    <div>
+                        <dt>Stock quantity</dt>
+                        <dd>
+                            <span class="change-before">
+                                <span class="sr-only">From </span>{{ record.details.quantity_before }}
+                            </span>
+                            <span aria-hidden="true"> → </span>
+                            <span class="change-after">
+                                <span class="sr-only">to </span>{{ record.details.quantity_after }}
+                            </span>
+                        </dd>
+                    </div>
+
+                    <div>
+                        <dt>Quantity change</dt>
+                        <dd>
+                            {{ record.details.quantity_change > 0 ? '+' : '' }}{{ record.details.quantity_change }}
+                        </dd>
+                    </div>
+
+                    <div>
+                        <dt>Reason</dt>
+                        <dd>{{ record.details.reason }}</dd>
+                    </div>
+                </dl>
+
                 <span v-else>—</span>
               </td>
             </tr>
