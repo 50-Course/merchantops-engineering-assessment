@@ -116,6 +116,19 @@ class InventoryAdjustmentSerializer(serializers.Serializer):
     quantity_change = serializers.IntegerField()
     reason = serializers.CharField()
 
+    def validate(self, attrs):
+        unexpected = set(self.initial_data) - set(self.fields)
+
+        if unexpected:
+            raise serializers.ValidationError(
+                {
+                    field: "This field cannot be modified."
+                    for field in sorted(unexpected)
+                }
+            )
+
+        return attrs
+
     def validate_quantity_change(self, value):
         if type(self.initial_data["quantity_change"]) is not int:
             raise serializers.ValidationError("Quantity change must be an integer.")
@@ -176,6 +189,8 @@ class InventoryAdjustmentSerializer(serializers.Serializer):
             action="inventory.adjusted",
             details={
                 "variant_id": variant.pk,
+                "actor_id": actor.pk,
+                "actor_username": actor.get_username(),
                 "quantity_change": quantity_change,
                 "quantity_before": quantity_before,
                 "quantity_after": quantity_after,
