@@ -23,6 +23,20 @@ const dirty = computed(() => changed.value.length > 0)
 const saving = ref(false)
 const saveError = ref('')
 const saved = ref(false)
+const adjustingVariant = ref(null)
+const adjustmentAmount = ref('')
+const adjustmentReason = ref('')
+const adjusting = ref(false)
+const adjustmentError = ref('')
+const adjustmentSuccess = ref('')
+
+const canAdjust = computed(() =>
+  adjustingVariant.value !== null &&
+  Number.isSafeInteger(adjustmentAmount.value) &&
+  adjustmentAmount.value !== 0 &&
+  adjustmentReason.value.trim().length > 0 &&
+  !adjusting.value
+)
 const formatPrice = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const tiers = computed(() => [...new Set([
   'retail',
@@ -129,6 +143,50 @@ async function save() {
     saving.value = false
   }
 }
+
+
+function openAdjustment(variant) {
+  adjustingVariant.value = variant
+  adjustmentAmount.value = ''
+  adjustmentReason.value = ''
+  adjustmentError.value = ''
+  adjustmentSuccess.value = ''
+}
+
+function cancelAdjustment() {
+  adjustingVariant.value = null
+  adjustmentError.value = ''
+}
+
+async function adjustInventory() {
+  if (!canAdjust.value) return
+
+  const variant = adjustingVariant.value
+  adjusting.value = true
+  adjustmentError.value = ''
+  adjustmentSuccess.value = ''
+
+  try {
+    const record = await products.adjustInventory(id, variant.id, {
+      quantity_change: adjustmentAmount.value,
+      reason: adjustmentReason.value.trim(),
+    })
+
+    variant.inventory.quantity = record.details.quantity_after
+    variant.inventory.reserved = record.details.reserved
+
+    adjustmentSuccess.value =
+      `Stock adjusted for ${variant.name}: ` +
+      `${record.details.quantity_before} → ${record.details.quantity_after}.`
+
+    adjustingVariant.value = null
+  } catch (failure) {
+    adjustmentError.value = failure.message
+  } finally {
+    adjusting.value = false
+  }
+}
+
 </script>
 
 <template>
@@ -234,7 +292,7 @@ async function save() {
       <div v-if="product.variants.length" class="table-scroll">
         <table class="data-table">
           <thead>
-            <tr><th scope="col">Variant</th><th scope="col">SKU</th><th scope="col" class="numeric">Quantity</th><th scope="col" class="numeric">Reserved</th><th scope="col" class="numeric">Available</th></tr>
+            <tr><th scope="col">Variant</th><th scope="col">SKU</th><th scope="col" class="numeric">Quantity</th><th scope="col" class="numeric">Reserved</th><th scope="col" class="numeric">Available</th><th scope="col">Actions</th></tr>
           </thead>
           <tbody>
             <tr v-for="variant in product.variants" :key="variant.id">
@@ -243,11 +301,83 @@ async function save() {
               <td class="numeric">{{ variant.inventory?.quantity ?? '—' }}</td>
               <td class="numeric">{{ variant.inventory?.reserved ?? '—' }}</td>
               <td class="numeric">{{ variant.inventory ? variant.inventory.quantity - variant.inventory.reserved : '—' }}</td>
+              <td>
+                  <button
+                          class="button"
+                          type="button"
+                          :disabled="!variant.inventory || adjusting"
+                          @click="openAdjustment(variant)"
+                          >
+                          Adjust stock
+                  </button>
+              </td>
             </tr>
           </tbody>
         </table>
       </div>
       <p v-else class="request-state">No variants for this product.</p>
+        <form v-if="adjustingVariant" @submit.prevent="adjustInventory">
+          <div class="form-content">
+            <h2>Adjust stock — {{ adjustingVariant.name }}</h2>
+            <p class="code">{{ adjustingVariant.sku }}</p>
+
+            <fieldset class="editor-fields" :disabled="adjusting">
+              <div class="form-grid">
+                <label class="field">
+                  Quantity change
+                  <input
+                    v-model.number="adjustmentAmount"
+                    type="number"
+                    step="1"
+                    required
+                    aria-describedby="adjustment-help"
+                  />
+                  <small id="adjustment-help">
+                    Enter a positive number to add stock or a negative number to deduct stock.
+                  </small>
+                </label>
+
+                <label class="field field-wide">
+                  Reason
+                  <textarea
+                    v-model="adjustmentReason"
+                    rows="3"
+                    required
+                  ></textarea>
+                </label>
+              </div>
+            </fieldset>
+          </div>
+
+          <div class="form-footer">
+            <div class="save-feedback">
+              <p v-if="adjustmentError" class="error-text" role="alert">
+                {{ adjustmentError }}
+              </p>
+            </div>
+
+            <button
+              class="button"
+              type="button"
+              :disabled="adjusting"
+              @click="cancelAdjustment"
+            >
+              Cancel
+            </button>
+
+            <button
+              class="button button-primary"
+              type="submit"
+              :disabled="!canAdjust"
+            >
+              {{ adjusting ? 'Adjusting…' : 'Adjust stock' }}
+            </button>
+          </div>
+        </form>
+
+        <div v-if="adjustmentSuccess" class="form-content">
+          <p class="success-text" role="status">{{ adjustmentSuccess }}</p>
+        </div>
     </section>
 
     <section v-show="tab === 'availability'" id="panel-availability" class="panel tab-panel" role="tabpanel" aria-labelledby="tab-availability" tabindex="0">
